@@ -1,0 +1,13 @@
+/imagen
+/bin/
+/dist/
+/output/
+/state/
+/credentials/
+*.key
+*.env
+*.env.local
+config.json
+config.local.json
+*.log
+.DS_Store

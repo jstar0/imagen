@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "default_model": "gpt-image",
+  "concurrency": 2,
+  "aliases": {
+    "gpt-image": "gpt-image-2",
+    "grok": "grok-imagine-image-2.0"
+  },
+  "providers": {
+    "openai": {
+      "kind": "gpt-image",
+      "supported_models": ["gpt-image-2"],
+      "capabilities": ["generate", "edit", "batch", "mask", "stream", "compression", "background", "moderation"],
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "timeout_seconds": 600,
+      "priority": 10
+    },
+    "xai": {
+      "kind": "grok",
+      "supported_models": ["grok-imagine-image-2.0"],
+      "capabilities": ["generate", "edit", "batch"],
+      "base_url": "https://api.x.ai/v1",
+      "api_key_env": "XAI_API_KEY",
+      "timeout_seconds": 600,
+      "priority": 10
+    }
+  }
+}
