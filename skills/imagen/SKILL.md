@@ -13,7 +13,7 @@ imagen edit --from JOB --prompt "..." --name revision --output ./images --json
 imagen wait JOB --timeout 30 --json
 ```
 
-Use a task-specific output directory. A prompt file or stdin avoids shell escaping for long text. Repeated `--reference` passes multiple images; `--negative-prompt` appends explicit exclusions. For continued edits, reuse the exact task ID from this task and optionally `--image-index`; global `--from last` might refer to another client's image. Edits inherit the source model unless overridden.
+Use a task-specific output directory. A prompt file or stdin avoids shell escaping for long text; its content is only the visual brief, not the whole task message, workflow instructions or validation checklist. Repeated `--reference` passes multiple images; `--negative-prompt` appends explicit exclusions. For continued edits, reuse the exact task ID from this task and optionally `--image-index`; global `--from last` might refer to another client's image. Edits inherit the source model unless overridden. For consistent product identity across variants, edit a shared reference; a count batch does not lock identity.
 
 Submission returns before the image is ready. Continue useful work and collect the same job, or use `--wait` for a simple blocking command. Wait exit 2 means still running, not failed; it does not cancel the worker. `list` finds earlier jobs. On `partial` or `unknown`, inspect saved results before deciding about another paid request. Automatic failover never replays uncertain or partially delivered work.
 

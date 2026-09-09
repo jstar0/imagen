@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -48,7 +49,9 @@ func NewCommand() *cobra.Command {
 	var configPath, home string
 	var asJSON bool
 	root := &cobra.Command{Use: "imagen", Short: "Persistent asynchronous Grok and GPT Image CLI", Version: Version, SilenceUsage: true, SilenceErrors: true}
-	if BuildCommit!=""{root.Version+=" ("+BuildCommit+")"}
+	if BuildCommit != "" {
+		root.Version += " (" + BuildCommit + ")"
+	}
 	root.PersistentFlags().StringVar(&configPath, "config", ConfigPath(), "Provider configuration file")
 	root.PersistentFlags().StringVar(&home, "home", StateRoot(), "Persistent task directory (shared between clients)")
 	root.PersistentFlags().BoolVar(&asJSON, "json", false, "Emit stable JSON")
@@ -108,6 +111,9 @@ func NewCommand() *cobra.Command {
 		var wait bool
 		var waitSeconds float64
 		gen := &cobra.Command{Use: op, Short: "Generate or edit images with automatic provider selection", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+			if wait && (math.IsNaN(waitSeconds) || math.IsInf(waitSeconds, 0) || waitSeconds < 0 || waitSeconds > 3600) {
+				return fmt.Errorf("timeout must be 0..3600 seconds")
+			}
 			cfg, err := LoadConfig(configPath)
 			if err != nil {
 				return err
