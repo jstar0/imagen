@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "0.2.1"
+const Version = "0.3.1"
 
 // BuildCommit is supplied by the release/local installer; never changes routing.
 var BuildCommit string
@@ -33,7 +33,7 @@ type jobView struct {
 }
 
 func publicJob(j Job) jobView {
-	if j.Result != nil && j.Request.Size != "" && j.Request.Size != "auto" {
+	if j.Result != nil && len(j.Result.Images) > 0 && j.Request.Size != "" && j.Request.Size != "auto" {
 		result := *j.Result
 		result.RequestedSize = j.Request.Size
 		actual := fmt.Sprintf("%dx%d", result.Width, result.Height)
@@ -189,7 +189,7 @@ func NewCommand() *cobra.Command {
 					return e
 				}
 				if timed {
-					return &ExitError{Code: 2}
+					return nil
 				}
 				if j.Status != "succeeded" {
 					return &ExitError{Code: 1}
@@ -237,7 +237,7 @@ func NewCommand() *cobra.Command {
 	root.AddCommand(status)
 	var timeout float64
 	wait := &cobra.Command{Use: "wait JOB", Short: "Wait for a task; timeout does not cancel generation", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if timeout < 0 || timeout > 3600 {
+		if math.IsNaN(timeout) || math.IsInf(timeout, 0) || timeout < 0 || timeout > 3600 {
 			return fmt.Errorf("timeout must be 0..3600 seconds")
 		}
 		deadline := time.Now().Add(time.Duration(timeout * float64(time.Second)))
@@ -267,7 +267,7 @@ func NewCommand() *cobra.Command {
 				if e != nil {
 					return e
 				}
-				return &ExitError{Code: 2}
+				return nil
 			}
 			select {
 			case <-cmd.Context().Done():
@@ -276,7 +276,7 @@ func NewCommand() *cobra.Command {
 			}
 		}
 	}}
-	wait.Flags().Float64Var(&timeout, "timeout", 30, "Seconds to wait (exit 2 if still active; worker continues)")
+	wait.Flags().Float64Var(&timeout, "timeout", 30, "Seconds to wait (running + wait_timeout on expiry; worker continues)")
 	root.AddCommand(wait)
 	var limit int
 	list := &cobra.Command{Use: "list", Short: "List recent tasks across sessions", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {

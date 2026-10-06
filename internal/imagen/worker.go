@@ -231,10 +231,15 @@ func (s Store) Worker(id, workerToken string, ready io.Writer) error {
 		callCtx, timeout := context.WithTimeout(ctx, time.Duration(p.TimeoutSeconds)*time.Second)
 		result, callErr := GenerateWithProgress(callCtx, p, key, j.Request, filepath.Join(j.Request.Output, stem), func(result Result) error { _, e := s.update(id, func(j *Job) { j.Result = &result }); return e })
 		timeout()
-		if callErr != nil && (len(result.Images) > 0 || len(result.Previews) > 0 || result.Path != "") {
+		if callErr != nil && (result.Response != nil || result.RequestID != "" || len(result.Images) > 0 || len(result.Previews) > 0 || result.Path != "") {
 			_, _ = s.update(id, func(j *Job) { j.Result = &result })
 		}
 		if callErr == nil {
+			for _, attempt := range j.Attempts {
+				if attempt.FellBack && attempt.BillingUnknown {
+					result.Warnings = append(result.Warnings, "A prior provider returned a terminal error before fallback; its billing remains unknown: "+attempt.Provider)
+				}
+			}
 			result.Warnings = append(result.Warnings, p.Notes...)
 			if e := s.RecordProvider(p, j.Request, true, 0); e != nil {
 				result.Warnings = append(result.Warnings, "Provider health could not be recorded")
@@ -252,6 +257,8 @@ func (s Store) Worker(id, workerToken string, ready io.Writer) error {
 		_, _ = s.update(id, func(j *Job) {
 			j.Attempts[len(j.Attempts)-1].Status = "failed"
 			j.Attempts[len(j.Attempts)-1].Error = message
+			j.Attempts[len(j.Attempts)-1].Response = result.Response
+			j.Attempts[len(j.Attempts)-1].RequestID = result.RequestID
 		})
 		var pe *ProviderError
 		if errors.As(callErr, &pe) {
@@ -263,7 +270,15 @@ func (s Store) Worker(id, workerToken string, ready io.Writer) error {
 				cooldown = time.Duration(pe.RetryAfterSeconds) * time.Second
 			}
 			_ = s.RecordProvider(p, j.Request, false, cooldown)
-			if pe.SafeFallback && !pe.Unknown && ctx.Err() == nil && len(result.Images) == 0 && len(result.Previews) == 0 && result.Path == "" && index+1 < len(profiles) {
+			j, err = s.update(id, func(j *Job) { j.Attempts[len(j.Attempts)-1].BillingUnknown = pe.Unknown })
+			if err != nil {
+				return err
+			}
+			if (pe.SafeFallback || pe.RetryableFailure) && !pe.Partial && ctx.Err() == nil && len(result.Images) == 0 && len(result.Previews) == 0 && result.Path == "" && index+1 < len(profiles) {
+				j, err = s.update(id, func(j *Job) { j.Attempts[len(j.Attempts)-1].FellBack = true })
+				if err != nil {
+					return err
+				}
 				continue
 			}
 		}

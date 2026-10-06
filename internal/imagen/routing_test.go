@@ -28,6 +28,13 @@ func TestRoutesExactModelsCapabilitiesAndExplicit(t *testing.T) {
 	if _, err = s.Routes(c, "gpt-image-2.5", "", Request{}); err == nil {
 		t.Fatal("unknown model accepted")
 	}
+	q25 := c.Providers["wecode"]
+	q25.SupportedModels = append(q25.SupportedModels, "gpt-image-2.5")
+	c.Providers["wecode"] = q25
+	routes, err = s.Routes(c, "gpt-image-2.5", "", Request{})
+	if err != nil || len(routes) != 1 || routes[0].Name != "wecode" || routes[0].Model != "gpt-image-2.5" {
+		t.Fatalf("2.5 routes=%+v error=%v", routes, err)
+	}
 	q := c.Providers["wecode"]
 	q.Capabilities = []string{"generate"}
 	c.Providers["wecode"] = q

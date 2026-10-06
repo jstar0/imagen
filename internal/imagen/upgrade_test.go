@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,6 +45,34 @@ func TestCLIUpgradeRoutingAndEditing(t *testing.T) {
 	if out, e := exec.Command("go", "build", "-o", bin, "../../cmd/imagen").CombinedOutput(); e != nil {
 		t.Fatalf("%v %s", e, out)
 	}
+	t.Run("terminal_error_after_image_does_not_replay", func(t *testing.T) {
+		var secondCalls atomic.Int32
+		first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			item := responseImageItem{ID: "ig-1", Type: "image_generation_call", Status: "completed", Result: base64.StdEncoding.EncodeToString(fixturePNG(t))}
+			b, _ := json.Marshal(map[string]any{"type": "response.output_item.done", "item": item})
+			fmt.Fprintf(w, "data: %s\n\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"internal_server_error\"}}}\n\n", b)
+		}))
+		defer first.Close()
+		second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { secondCalls.Add(1); replyPNG(w, fixturePNG(t)) }))
+		defer second.Close()
+		c := newLifecycleCLI(t, bin, first.URL)
+		profile := func(url string, priority int) Profile {
+			return Profile{Kind: "gpt-image", BaseURL: url, SupportedModels: []string{"gpt-image-2"}, Capabilities: []string{"generate"}, APIKeyEnv: "IMAGEN_LIFECYCLE_TEST_KEY", TimeoutSeconds: 5, Priority: priority}
+		}
+		p := profile(first.URL, 1)
+		p.GenerationAPI = "responses"
+		p.ResponsesModel = "test-orchestrator"
+		cfg := Config{Version: 2, DefaultModel: "gpt-image-2", Concurrency: 1, Providers: map[string]Profile{"first": p, "second": profile(second.URL, 2)}}
+		b, _ := json.Marshal(cfg)
+		os.WriteFile(c.config, b, 0600)
+		b, code := c.run("generate", "--prompt", "draw", "--wait", "--timeout", "8")
+		var j Job
+		json.Unmarshal(b, &j)
+		if code != 1 || secondCalls.Load() != 0 || len(j.Attempts) != 1 || j.Result == nil || len(j.Result.Images) != 1 {
+			t.Fatalf("partial replay or lost image: %d %s", code, b)
+		}
+	})
 	for _, tc := range []struct {
 		name       string
 		status     int
@@ -54,15 +83,31 @@ func TestCLIUpgradeRoutingAndEditing(t *testing.T) {
 	}{
 		{"auth_fails_over", 401, `{"error":"Invalid API key"}`, false, 1, 0},
 		{"pinned_does_not", 401, `{"error":"Invalid API key"}`, true, 0, 1},
-		{"unknown_does_not", 502, `{"error":"upstream lost"}`, false, 0, 1},
+		{"gateway_fails_over", 502, `{"error":"upstream lost"}`, false, 1, 0},
+		{"timeout_fails_over", 504, `<html>gateway timeout</html>`, false, 1, 0},
+		{"duojie_eof_fails_over", 200, `{"error":{"code":"internal_server_error","message":"Post upstream: EOF"}}`, false, 1, 0},
+		{"pinned_server_does_not", 504, `gateway timeout`, true, 0, 1},
+		{"empty_unknown_does_not", 200, `{"data":[]}`, false, 0, 1},
+		{"bad_parameter_does_not", 400, `{"error":{"code":"invalid_parameter"}}`, false, 0, 1},
+		{"server_safety_does_not", 500, `{"error":{"code":"content_policy_violation"}}`, false, 0, 1},
+		{"all_fail_once", 504, `gateway timeout`, false, 1, 1},
 		{"moderation_does_not", 400, `{"error":{"code":"moderation_blocked"}}`, false, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var firstCalls atomic.Int32
 			var secondCalls atomic.Int32
-			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); w.Write([]byte(tc.body)) }))
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				firstCalls.Add(1)
+				w.WriteHeader(tc.status)
+				w.Write([]byte(tc.body))
+			}))
 			defer first.Close()
 			second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				secondCalls.Add(1)
+				if tc.name == "all_fail_once" {
+					w.WriteHeader(503)
+					return
+				}
 				var payload map[string]any
 				if r.URL.Path == "/v1/images/generations" {
 					json.NewDecoder(r.Body).Decode(&payload)
@@ -91,9 +136,18 @@ func TestCLIUpgradeRoutingAndEditing(t *testing.T) {
 			if secondCalls.Load() != tc.wantSecond {
 				t.Fatalf("second calls %d want%d", secondCalls.Load(), tc.wantSecond)
 			}
+			if firstCalls.Load() != 1 {
+				t.Fatal("first provider replayed")
+			}
 			var j Job
 			if json.Unmarshal(b, &j) != nil {
 				t.Fatalf("bad job: %s", b)
+			}
+			if tc.wantSecond == 1 && (len(j.Attempts) != 2 || !j.Attempts[0].FellBack || j.Attempts[0].Response == nil) {
+				t.Fatalf("fallback metadata missing: %s", b)
+			}
+			if tc.wantCode == 0 && (tc.status >= 500 || tc.name == "duojie_eof_fails_over") && (!j.Attempts[0].BillingUnknown || j.Result == nil || len(j.Result.Warnings) == 0) {
+				t.Fatalf("billing warning missing: %s", b)
 			}
 			if tc.wantCode == 0 {
 				if len(j.Attempts) != 2 || j.Attempts[0].Status != "failed" || j.Attempts[1].Status != "succeeded" {
@@ -154,6 +208,14 @@ func TestSerialBatchAndJSONEdit(t *testing.T) {
 }
 
 func TestPresetNormalization(t *testing.T) {
+	base := Profile{Kind: "gpt-image", Model: "gpt-image-2.5", BaseURL: "https://example.test"}
+	if e := ValidateRequest(base, Request{Prompt: "test", Count: 1, Quality: "max"}); e != nil {
+		t.Fatalf("exact GPT Image 2.5 rejected max quality: %v", e)
+	}
+	base.Model = "gpt-image-2"
+	if e := ValidateRequest(base, Request{Prompt: "test", Count: 1, Quality: "max"}); e == nil {
+		t.Fatal("GPT Image 2 accepted unsupported max quality")
+	}
 	for _, tc := range []struct {
 		model, size, ratio, wantSize, wantResolution string
 		fail                                         bool

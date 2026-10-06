@@ -66,6 +66,9 @@ func operation(r Request) string {
 	return "generate"
 }
 func missingCapability(p Profile, r Request) string {
+	if p.GenerationAPI == "responses" && len(r.References) == 0 && r.Moderation != "" {
+		return "moderation (Responses generation)"
+	}
 	caps := p.Capabilities
 	if len(caps) == 0 {
 		caps = []string{"generate", "edit"}
@@ -115,7 +118,14 @@ type providerHealth struct {
 
 func healthKey(p Profile, r Request) string { return p.Name + "/" + p.Model + "/" + operation(r) }
 func fingerprint(p Profile, key string) string {
-	b := sha256.Sum256([]byte(p.BaseURL + "\x00" + p.Model + "\x00" + key))
+	identity := p.BaseURL + "\x00" + p.Model + "\x00" + key
+	if p.NativeCodex {
+		identity += "\x00native-codex-images"
+	}
+	if p.GenerationAPI != "" || p.ResponsesModel != "" {
+		identity += "\x00" + p.GenerationAPI + "\x00" + p.ResponsesModel
+	}
+	b := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(b[:])
 }
 

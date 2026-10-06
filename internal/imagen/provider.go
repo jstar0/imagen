@@ -29,12 +29,13 @@ import (
 const maxImageBytes = 128 << 20
 
 // ProviderError distinguishes definite rejection from a request whose remote
-// outcome is unknown. Neither kind authorizes an automatic paid retry.
+// outcome is unknown. Fallback eligibility is separate from billing certainty.
 type ProviderError struct {
 	Unknown           bool
 	Partial           bool
 	Message           string
 	SafeFallback      bool
+	RetryableFailure  bool // Explicit terminal channel failure; billing may remain unknown.
 	StatusCode        int
 	RetryAfterSeconds int
 }
@@ -60,6 +61,18 @@ func safeURL(raw string) (*url.URL, error) {
 }
 
 func ValidateRequest(p Profile, r Request) error {
+	if p.NativeCodex && (p.Kind != "gpt-image" || p.GenerationAPI == "responses" || strings.TrimSpace(p.ResponsesModel) == "") {
+		return fmt.Errorf("native Codex image transport requires a GPT Image Images API profile and responses_model")
+	}
+	if !oneOf(p.GenerationAPI, "", "images", "responses") {
+		return fmt.Errorf("unsupported generation_api")
+	}
+	if p.GenerationAPI == "responses" && (p.Kind != "gpt-image" || strings.TrimSpace(p.ResponsesModel) == "") {
+		return fmt.Errorf("Responses generation requires a GPT Image provider and explicit responses_model")
+	}
+	if p.GenerationAPI == "responses" && len(r.References) == 0 && r.Moderation != "" {
+		return fmt.Errorf("Responses image generation does not expose moderation; use an Images API provider")
+	}
 	if r.Count < 0 || r.Count > 10 {
 		return fmt.Errorf("count must be 1 through 10")
 	}
@@ -124,7 +137,8 @@ func ValidateRequest(p Profile, r Request) error {
 		if r.AspectRatio != "" || r.Resolution != "" {
 			return fmt.Errorf("GPT Image uses size, not aspect-ratio or resolution")
 		}
-		if !oneOf(r.Quality, "", "auto", "low", "medium", "high") && !(strings.HasPrefix(p.Model, "gpt-image-2.5-") && oneOf(r.Quality, "xhigh", "max")) {
+		isGPTImage25 := p.Model == "gpt-image-2.5" || strings.HasPrefix(p.Model, "gpt-image-2.5-")
+		if !oneOf(r.Quality, "", "auto", "low", "medium", "high") && !(isGPTImage25 && oneOf(r.Quality, "xhigh", "max")) {
 			return fmt.Errorf("GPT Image quality must be auto, low, medium or high")
 		}
 		if !oneOf(r.Format, "", "auto", "png", "jpeg", "webp") {
@@ -160,7 +174,7 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 	if !filepath.IsAbs(outputStem) {
 		return result, fmt.Errorf("output stem must be absolute")
 	}
-	if p.SingleImageRequests && imageCount(r) > 1 {
+	if (p.SingleImageRequests || (p.GenerationAPI == "responses" && len(r.References) == 0)) && imageCount(r) > 1 {
 		return generateSerialImages(ctx, p, key, r, outputStem, progress)
 	}
 	// Check all supported encodings before spending money, then atomically refuse
@@ -186,6 +200,12 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 		}
 	}
 	body, ct, e := providerBody(p, r)
+	responses := p.GenerationAPI == "responses" && len(r.References) == 0
+	if responses {
+		body, e = responsesBody(p, r)
+		ct = "application/json"
+		result.TransportModel = p.ResponsesModel
+	}
 	if e != nil {
 		return result, e
 	}
@@ -195,6 +215,9 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 		u.Path = "/v1"
 	}
 	u.Path += "/images/generations"
+	if responses {
+		u.Path = strings.TrimSuffix(u.Path, "/images/generations") + "/responses"
+	}
 	if len(r.References) > 0 {
 		u.Path = strings.TrimSuffix(u.Path, "generations") + "edits"
 	}
@@ -217,42 +240,78 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set("Accept", "application/json")
-	if r.Stream {
+	if r.Stream || responses {
 		req.Header.Set("Accept", "text/event-stream")
 	}
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return fmt.Errorf("API redirects are disabled") }}
-	resp, e := client.Do(req)
+	var resp *http.Response
+	if p.NativeCodex {
+		resp, e = codexNativeImageRequest(ctx, p, key, r, req, client)
+	} else {
+		resp, e = client.Do(req)
+	}
 	if e != nil {
+		if _, ok := e.(*ProviderError); ok {
+			return result, e
+		}
 		return result, providerFailure(true, "image request transport failed; remote outcome unknown")
 	}
 	defer resp.Body.Close()
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if !oneOf(mediaType, "application/json", "text/html", "text/plain", "text/event-stream", "image/png", "image/jpeg", "image/webp") {
+		mediaType = "other"
+	}
+	result.Response = &ResponseInfo{HTTPStatus: resp.StatusCode, ContentType: mediaType}
+	for _, name := range []string{"x-request-id", "x-wecode-request-id", "x-oneapi-request-id"} {
+		id := resp.Header.Get(name)
+		if id != "" && len(id) <= 128 && !strings.Contains(id, key) && regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`).MatchString(id) {
+			result.RequestID = id
+			break
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := fmt.Sprintf("image provider returned HTTP %d", resp.StatusCode)
 		// Only extract recognized fields from a bounded JSON error, never echo
 		// arbitrary response bodies, credential material or signed URLs.
 		errorBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		describeResponse(result.Response, errorBody)
 		if readErr == nil {
 			if detail := safeProviderDetail(errorBody, key); detail != "" {
 				message += ": " + detail
 			}
 		}
 		retry, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-		return result, &ProviderError{Unknown: resp.StatusCode >= 500, Message: message, StatusCode: resp.StatusCode, RetryAfterSeconds: retry, SafeFallback: safeRejection(resp.StatusCode, errorBody)}
+		return result, &ProviderError{Unknown: resp.StatusCode >= 500, Message: message, StatusCode: resp.StatusCode, RetryAfterSeconds: retry, SafeFallback: safeRejection(resp.StatusCode, errorBody), RetryableFailure: terminalChannelFailure(resp.StatusCode, errorBody)}
 	}
-	result.RequestID = resp.Header.Get("x-request-id")
-	if result.RequestID == "" {
-		result.RequestID = resp.Header.Get("x-wecode-request-id")
+	if responses {
+		if progress != nil {
+			if err := progress(result); err != nil {
+				return result, providerFailure(true, "cannot persist Responses metadata")
+			}
+		}
+		return consumeResponsesStream(resp.Body, r, outputStem, result, progress)
 	}
 	if r.Stream {
 		return consumeImageStream(resp.Body, r, outputStem, result, progress)
 	}
 	raw, e := limitedBytes(resp.Body)
+	describeResponse(result.Response, raw)
 	if e != nil {
 		return result, providerFailure(true, "cannot read image response; remote outcome unknown")
 	}
 	var payload imagePayload
-	if json.Unmarshal(raw, &payload) != nil || len(payload.Data) == 0 || len(payload.Data) > 10 {
-		return result, providerFailure(true, "image response contains no images or exceeds supported count")
+	if json.Unmarshal(raw, &payload) != nil {
+		return result, providerFailure(true, "image response is not an Images API JSON object ("+result.Response.BodyKind+"); remote outcome unknown")
+	}
+	if len(payload.Data) == 0 {
+		message := "image response has no entries in data; remote outcome unknown"
+		if detail := safeProviderDetail(raw, key); detail != "" {
+			message += ": " + detail
+		}
+		return result, &ProviderError{Unknown: true, Message: message, RetryableFailure: terminalChannelFailure(resp.StatusCode, raw)}
+	}
+	if len(payload.Data) > 10 {
+		return result, providerFailure(true, fmt.Sprintf("image response has %d entries, exceeding supported count 10", len(payload.Data)))
 	}
 	result.Usage = payload.Usage
 	result.ReturnedModel = payload.Model
@@ -280,6 +339,38 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 		return result, &ProviderError{Partial: true, Message: fmt.Sprintf("provider returned %d of %d requested images; saved results retained", len(result.Images), imageCount(r))}
 	}
 	return result, nil
+}
+
+func describeResponse(info *ResponseInfo, body []byte) {
+	info.Bytes = len(body)
+	trimmed := bytes.TrimSpace(body)
+	info.BodyKind = "non-json"
+	if len(trimmed) == 0 {
+		info.BodyKind = "empty"
+		return
+	}
+	if bytes.HasPrefix(trimmed, []byte("<")) {
+		info.BodyKind = "markup"
+		return
+	}
+	if bytes.HasPrefix(trimmed, []byte("data:")) || bytes.HasPrefix(trimmed, []byte("event:")) {
+		info.BodyKind = "sse"
+		return
+	}
+	if !json.Valid(body) {
+		return
+	}
+	info.BodyKind = "json"
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil {
+		return
+	}
+	// Only known field names are retained; user-controlled keys may be secrets.
+	for _, field := range []string{"data", "error", "message", "code", "status", "id", "output", "choices", "images", "result", "url", "b64_json", "task_id"} {
+		if _, ok := object[field]; ok {
+			info.Fields = append(info.Fields, field)
+		}
+	}
 }
 
 var errorURLPattern = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)

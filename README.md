@@ -52,6 +52,7 @@ Optional provider adapter settings:
 | `headers` | Additional non-secret gateway headers; cannot override API authentication |
 | `priority` | Lower number is preferred when health/success history is otherwise equal |
 | `notes` | Surface known channel limitations in results |
+| `native_codex: true` | Gateways restricted to official clients: invoke the installed Codex Images client in an isolated, image-only local relay; requires `generation_api: "images"` and `responses_model` |
 
 Capability names: `generate`, `edit`, `batch`, `mask`, `stream`, `compression`,
 `background`, `input_fidelity`, `moderation`. Omission preserves the legacy
@@ -74,7 +75,7 @@ imagen edit --model gpt-image --provider openai --reference ./source.png \
   --mask ./mask.png --prompt 'Edit the transparent area' --output ./images --json
 
 imagen generate --model grok --prompt-file ./prompt.txt \
-  --size 1K --aspect-ratio 3:2 --output ./images --wait --timeout 120 --json
+  --resolution 1k --aspect-ratio 3:2 --output ./images --wait --timeout 120 --json
 
 imagen wait JOB --timeout 30 --json
 imagen status JOB --json
@@ -98,10 +99,24 @@ guarantee pixel-exact preservation. macOS `--notify` opts into completion notice
 
 ## Routing, lifetime and costs
 
+For gateways needing streaming Responses generation, see the explicit
+[Responses adapter configuration](docs/responses-generation.md). Reference edits
+keep their existing Images API path.
+
+For an official-Codex-only gateway, see [native image transport](docs/native-codex-images.md).
+This adapter retains the image key and requested image API parameters. Its local
+control messages invoke only the native image tool; no remote coding turn is sent.
+
 Without `--provider`, select a capable provider with readable credentials, avoiding
 recent failures and preferring recent success, then configured priority. Definite
-auth/quota/model/rate rejection may fail over. A pinned provider never changes.
-No automatic paid health probes, model substitution, or network-ambiguity replay.
+auth/quota/model/rate rejection and terminal channel errors (HTTP 5xx or explicit
+upstream/server errors, including an error-body EOF) fail over if no image or preview
+was delivered. Each candidate is attempted at most once within the same job.
+A pinned provider never changes. Safety/input errors, local polling timeouts,
+partial images and transport loss without a terminal server error do not replay.
+Prior attempts retain response metadata and possible duplicate-billing warnings.
+No automatic paid health probes or model substitution.
+See [fallback behavior and evidence](docs/fallback.md) for the exact boundaries.
 
 Tasks outlive the submitting CLI under `~/.local/state/imagen` (`IMAGEN_HOME` or
 `--home` overrides). This directory privately retains prompts, reference paths,
@@ -109,8 +124,11 @@ status and health records. Images remain in the chosen output directory. Every
 attempt is recorded; credentials are not included. A credential fingerprint
 invalidates old cooldown records after rotation.
 
-`wait` exits 0 on success, 1 for terminal failure/partial/unknown/cancellation, 2
-on timeout. Timeout does not cancel. `status` exits 0 when it can read a task,
+Since 0.3.0, `wait` and `generate --wait` exit 0 on success or a normal polling timeout, and 1 for
+terminal failure/partial/unknown/cancellation. Check JSON `status`; `running`
+with `wait_timeout: true` means collect the same job again, not a completed image.
+This replaces the old timeout exit 2 to avoid reporting normal waits as tool failures.
+Timeout does not cancel. `status` exits 0 when it can read a task,
 including a failed task. `partial`/`unknown` results may still contain saved images
 or previews; inspect before initiating another paid task. Cancellation/reboot
 does not imply upstream cancellation or refund. No automatic restart after a

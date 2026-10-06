@@ -25,6 +25,29 @@ func TestCLILifecycle(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, out)
 	}
+	t.Run("failed_response_metadata_survives_detached_worker", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("X-Wecode-Request-Id", "failed-request-123")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(504)
+			w.Write([]byte(`{"error":{"message":"lifecycle-only-secret at https://private.example/signed"}}`))
+		}))
+		defer srv.Close()
+		c := newLifecycleCLI(t, bin, srv.URL)
+		job := c.job("generate", "--prompt", "draw")
+		b, code := c.run("wait", job.ID, "--timeout", "10")
+		var done jobView
+		if err := json.Unmarshal(b, &done); err != nil || code != 1 || done.Status != "unknown" || done.Result == nil || done.Result.Response == nil || done.Result.Response.HTTPStatus != 504 || done.Result.RequestID != "failed-request-123" {
+			t.Fatalf("missing error evidence: code=%d %s err=%v", code, b, err)
+		}
+		c.job("status", job.ID)
+		if calls.Load() != 1 {
+			t.Fatal("reading failure resubmitted paid request")
+		}
+		c.assertNoSecret()
+	})
 	t.Run("detached_reference_and_config_independent_status", func(t *testing.T) {
 		png := fixturePNG(t)
 		var calls atomic.Int32
@@ -130,7 +153,7 @@ func TestCLILifecycle(t *testing.T) {
 			Job
 			WaitTimeout bool `json:"wait_timeout"`
 		}
-		if err := json.Unmarshal(b, &timed); err != nil || code != 2 || !timed.WaitTimeout || timed.CancelRequested {
+		if err := json.Unmarshal(b, &timed); err != nil || code != 0 || !timed.WaitTimeout || timed.CancelRequested {
 			t.Fatalf("timeout changed task: code=%d %s (%v)", code, b, err)
 		}
 		second := c.job("generate", "--prompt", "cancel queued")

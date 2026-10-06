@@ -189,7 +189,7 @@ func consumeImageStream(reader io.Reader, r Request, stem string, result Result,
 		partial := strings.HasSuffix(kind, ".partial_image")
 		final := strings.HasSuffix(kind, ".completed")
 		if strings.Contains(kind, "error") || strings.HasSuffix(kind, ".failed") {
-			return providerFailure(true, "image stream failed; remote outcome unknown")
+			return &ProviderError{Unknown: true, Message: "image stream failed; remote outcome unknown", RetryableFailure: terminalChannelFailure(200, []byte(raw))}
 		}
 		if !partial && !final {
 			return nil
@@ -288,6 +288,8 @@ func generateSerialImages(ctx context.Context, p Profile, key string, r Request,
 			return all, &ProviderError{Partial: len(all.Images) > 0, Message: "batch stopped before next image", Unknown: false}
 		}
 		result, e := GenerateWithProgress(ctx, p, key, one, imageStem(stem, i, n), nil)
+		all.Response = result.Response
+		all.TransportModel = result.TransportModel
 		all.Images = append(all.Images, result.Images...)
 		all.Previews = append(all.Previews, result.Previews...)
 		all.Warnings = append(all.Warnings, result.Warnings...)

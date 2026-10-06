@@ -13,6 +13,9 @@ type Config struct {
 
 // Profile contains credential references, never credentials.
 type Profile struct {
+	NativeCodex         bool              `json:"native_codex,omitempty"`
+	GenerationAPI       string            `json:"generation_api,omitempty"`
+	ResponsesModel      string            `json:"responses_model,omitempty"`
 	Name                string            `json:"name,omitempty"`
 	SupportedModels     []string          `json:"supported_models,omitempty"`
 	Capabilities        []string          `json:"capabilities,omitempty"`
@@ -54,19 +57,30 @@ type Request struct {
 }
 
 type Result struct {
-	Images        []ImageFile       `json:"images,omitempty"`
-	Previews      []ImageFile       `json:"previews,omitempty"`
-	ReturnedModel string            `json:"returned_model,omitempty"`
-	Path          string            `json:"path"`
-	Format        string            `json:"format"`
-	Width         int               `json:"width"`
-	Height        int               `json:"height"`
-	RequestID     string            `json:"request_id,omitempty"`
-	Usage         json.RawMessage   `json:"usage,omitempty"`
-	RequestIDs    []string          `json:"request_ids,omitempty"`
-	Usages        []json.RawMessage `json:"usages,omitempty"`
-	RequestedSize string            `json:"requested_size,omitempty"`
-	Warnings      []string          `json:"warnings,omitempty"`
+	TransportModel string            `json:"transport_model,omitempty"`
+	Response       *ResponseInfo     `json:"response,omitempty"`
+	Images         []ImageFile       `json:"images,omitempty"`
+	Previews       []ImageFile       `json:"previews,omitempty"`
+	ReturnedModel  string            `json:"returned_model,omitempty"`
+	Path           string            `json:"path"`
+	Format         string            `json:"format"`
+	Width          int               `json:"width"`
+	Height         int               `json:"height"`
+	RequestID      string            `json:"request_id,omitempty"`
+	Usage          json.RawMessage   `json:"usage,omitempty"`
+	RequestIDs     []string          `json:"request_ids,omitempty"`
+	Usages         []json.RawMessage `json:"usages,omitempty"`
+	RequestedSize  string            `json:"requested_size,omitempty"`
+	Warnings       []string          `json:"warnings,omitempty"`
+}
+
+// ResponseInfo stores protocol metadata only, never raw bodies or image URLs.
+type ResponseInfo struct {
+	HTTPStatus  int      `json:"http_status"`
+	ContentType string   `json:"content_type,omitempty"`
+	Bytes       int      `json:"bytes,omitempty"`
+	BodyKind    string   `json:"body_kind,omitempty"`
+	Fields      []string `json:"fields,omitempty"`
 }
 
 type ImageFile struct {
@@ -77,10 +91,14 @@ type ImageFile struct {
 }
 
 type Attempt struct {
-	Provider  string `json:"provider"`
-	StartedAt string `json:"started_at"`
-	Error     string `json:"error,omitempty"`
-	Status    string `json:"status"`
+	Response       *ResponseInfo `json:"response,omitempty"`
+	RequestID      string        `json:"request_id,omitempty"`
+	BillingUnknown bool          `json:"billing_unknown,omitempty"`
+	FellBack       bool          `json:"fell_back,omitempty"`
+	Provider       string        `json:"provider"`
+	StartedAt      string        `json:"started_at"`
+	Error          string        `json:"error,omitempty"`
+	Status         string        `json:"status"`
 }
 
 type Job struct {
