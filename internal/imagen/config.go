@@ -98,6 +98,11 @@ func LoadConfig(path string) (Config, error) {
 				return c, fmt.Errorf("provider %s: authentication headers must use credential references", name)
 			}
 		}
+		for name, variable := range p.EnvHeaders {
+			if variable == "" || strings.ContainsAny(variable, "=\r\n") || oneOf(strings.ToLower(name), "authorization", "x-api-key", "api-key", "content-type", "host") {
+				return c, fmt.Errorf("provider %s: invalid environment header reference", name)
+			}
+		}
 		for _, cap := range p.Capabilities {
 			switch cap {
 			case "generate", "edit", "mask", "stream", "batch", "compression", "background", "input_fidelity", "moderation":
@@ -121,6 +126,11 @@ func LoadConfig(path string) (Config, error) {
 // Credential reads the explicit source first. It never executes shell code or
 // silently selects an unrelated credential inherited from another client.
 func Credential(p Profile) (string, error) {
+	for _, variable := range p.EnvHeaders {
+		if os.Getenv(variable) == "" {
+			return "", fmt.Errorf("credential environment header unavailable: %s", variable)
+		}
+	}
 	var key string
 	if p.APIKeyFile != "" {
 		b, err := readPrivate(expandPath(p.APIKeyFile))
@@ -166,8 +176,11 @@ func readPrivate(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential source unavailable: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("credential source must be an owner-only regular file: %s", path)
+	}
+	if err := checkPrivateFile(path, info); err != nil {
+		return nil, err
 	}
 	return os.ReadFile(path)
 }

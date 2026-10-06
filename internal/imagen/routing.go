@@ -119,6 +119,14 @@ type providerHealth struct {
 func healthKey(p Profile, r Request) string { return p.Name + "/" + p.Model + "/" + operation(r) }
 func fingerprint(p Profile, key string) string {
 	identity := p.BaseURL + "\x00" + p.Model + "\x00" + key
+	var headerNames []string
+	for name := range p.EnvHeaders {
+		headerNames = append(headerNames, name)
+	}
+	sort.Strings(headerNames)
+	for _, name := range headerNames {
+		identity += "\x00" + name + "\x00" + os.Getenv(p.EnvHeaders[name])
+	}
 	if p.NativeCodex {
 		identity += "\x00native-codex-images"
 	}
@@ -131,7 +139,7 @@ func fingerprint(p Profile, key string) string {
 
 func (s Store) readHealth() (map[string]providerHealth, error) {
 	result := map[string]providerHealth{}
-	b, err := os.ReadFile(filepath.Join(s.Root, "health.json"))
+	b, err := readStateFile(filepath.Join(s.Root, "health.json"))
 	if os.IsNotExist(err) {
 		return result, nil
 	}
