@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -20,7 +19,7 @@ import (
 // These tests run the actual compiled CLI and detached workers against loopback
 // HTTP fixtures; no live provider or user credential is involved.
 func TestCLILifecycle(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "imagen")
+	bin := filepath.Join(t.TempDir(), testBinaryName())
 	build := exec.Command("go", "build", "-mod=mod", "-o", bin, "../../cmd/imagen")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, out)
@@ -93,9 +92,6 @@ func TestCLILifecycle(t *testing.T) {
 		j := c.job("generate", "--prompt", "reference lifecycle", "--reference", "ref.png", "--output", "images")
 		// Query from a new process and a different directory after generate exited.
 		originalCWD := c.cwd
-		if resolved, err := filepath.EvalSymlinks(originalCWD); err == nil {
-			originalCWD = resolved
-		}
 		c.cwd = t.TempDir()
 		if err := os.Remove(c.config); err != nil {
 			t.Fatal(err)
@@ -108,10 +104,10 @@ func TestCLILifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(stored.Request.References) != 1 || stored.Request.References[0] != filepath.Join(originalCWD, "ref.png") {
+		if len(stored.Request.References) != 1 || !sameTestPath(stored.Request.References[0], filepath.Join(originalCWD, "ref.png")) {
 			t.Fatal("relative reference not resolved")
 		}
-		if !strings.HasPrefix(done.Result.Path, filepath.Join(originalCWD, "images")+string(os.PathSeparator)) {
+		if !sameTestPath(filepath.Dir(done.Result.Path), filepath.Join(originalCWD, "images")) {
 			t.Fatal("relative output moved with querying cwd")
 		}
 		actual, err := os.ReadFile(done.Result.Path)
@@ -204,7 +200,7 @@ func TestCLILifecycle(t *testing.T) {
 		if j.PID <= 0 || j.Status != "running" {
 			t.Fatalf("worker not running: %+v", j)
 		}
-		if err := syscall.Kill(j.PID, syscall.SIGKILL); err != nil {
+		if err := killTestProcess(j.PID); err != nil {
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(5 * time.Second)
@@ -251,7 +247,7 @@ func newLifecycleCLI(t *testing.T, bin, url string) *lifecycleCLI {
 		jobs, _ := (Store{Root: c.root}).List(100)
 		for _, j := range jobs {
 			if !terminal(j.Status) && j.PID > 0 {
-				_ = syscall.Kill(j.PID, syscall.SIGKILL)
+				_ = killTestProcess(j.PID)
 			}
 		}
 	})
@@ -323,14 +319,14 @@ func TestLifecycleConfigValidationAndCredentialSource(t *testing.T) {
 	p := Profile{Kind: "grok", Model: "fixture", BaseURL: "https://example.invalid", APIKeyEnv: "IMAGEN_LIFECYCLE_CONFIG_KEY", TimeoutSeconds: 10}
 	t.Setenv(p.APIKeyEnv, "inherited-unrelated-key")
 	p.EnvFile = filepath.Join(t.TempDir(), "provider.env")
-	if err := os.WriteFile(p.EnvFile, []byte("export IMAGEN_LIFECYCLE_CONFIG_KEY='explicit-key'\n"), 0600); err != nil {
+	if err := writePrivateTestFile(p.EnvFile, []byte("export IMAGEN_LIFECYCLE_CONFIG_KEY='explicit-key'\n")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Credential(p)
 	if err != nil || got != "explicit-key" {
 		t.Fatalf("explicit source not respected: %q %v", got, err)
 	}
-	if err := os.Chmod(p.EnvFile, 0644); err != nil {
+	if err := makeTestFilePublic(p.EnvFile); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = Credential(p); err == nil {

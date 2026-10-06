@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,22 @@ type nativeImageReply struct {
 	response *http.Response
 	err      error
 }
+
+type nativeDiagnostics struct {
+	sync.Mutex
+	text []byte
+}
+
+func (d *nativeDiagnostics) Write(p []byte) (int, error) {
+	d.Lock()
+	defer d.Unlock()
+	d.text = append(d.text, p...)
+	if len(d.text) > 4096 {
+		d.text = d.text[len(d.text)-4096:]
+	}
+	return len(p), nil
+}
+func (d *nativeDiagnostics) String() string { d.Lock(); defer d.Unlock(); return string(d.text) }
 
 func nativeControlSSE(w http.ResponseWriter, id string, item map[string]any) {
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -125,7 +142,7 @@ func (relay *nativeImageRelay) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 func nativeCodexBinary() (string, error) {
 	if explicit := os.Getenv("IMAGEN_CODEX_BINARY"); explicit != "" {
-		if info, err := os.Stat(explicit); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		if info, err := os.Stat(explicit); err == nil && !info.IsDir() && (runtime.GOOS == "windows" && strings.EqualFold(filepath.Ext(explicit), ".exe") || runtime.GOOS != "windows" && info.Mode()&0111 != 0) {
 			return explicit, nil
 		}
 		return "", fmt.Errorf("IMAGEN_CODEX_BINARY is not executable")
@@ -148,10 +165,26 @@ func nativeCodexConfig(p Profile, address string) string {
 	}
 	sort.Strings(keys)
 	var headers []string
+	actorDeclared := false
 	for _, key := range keys {
 		headers = append(headers, strconv.Quote(key)+" = "+strconv.Quote(p.Headers[key]))
+		if strings.EqualFold(key, "x-openai-actor-authorization") {
+			actorDeclared = true
+		}
 	}
-	return fmt.Sprintf("model_provider = \"imagen\"\nmodel = %q\n[features]\nimage_generation = true\nshell_tool = false\n[model_providers.imagen]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = false\nenv_key = \"IMAGEN_NATIVE_KEY\"\nsupports_websockets = false\nrequest_max_retries = 0\nstream_max_retries = 0\nhttp_headers = { %s }\n", p.ResponsesModel, "http://"+address+"/v1", strings.Join(headers, ", "))
+	// 当前 Codex 只用静态头判断 Images 能力。声明公开的本地标记，实际请求头
+	// 仍由 env_http_headers 读取，并在转发时由原始 Imagen 请求准确覆盖。
+	for key := range p.EnvHeaders {
+		if strings.EqualFold(key, "x-openai-actor-authorization") && !actorDeclared {
+			headers = append(headers, `"x-openai-actor-authorization" = "Bearer wecode"`)
+		}
+	}
+	var envHeaders []string
+	for key, variable := range p.EnvHeaders {
+		envHeaders = append(envHeaders, strconv.Quote(key)+" = "+strconv.Quote(variable))
+	}
+	sort.Strings(envHeaders)
+	return fmt.Sprintf("model_provider = \"imagen\"\nmodel = %q\n[features]\nimage_generation = true\nshell_tool = false\nshell_snapshot = false\nenable_request_compression = false\n[model_providers.imagen]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = false\nenv_key = \"IMAGEN_NATIVE_KEY\"\nsupports_websockets = false\nrequest_max_retries = 0\nstream_max_retries = 0\nhttp_headers = { %s }\nenv_http_headers = { %s }\n", p.ResponsesModel, "http://"+address+"/v1", strings.Join(headers, ", "), strings.Join(envHeaders, ", "))
 }
 
 func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Request, target *http.Request, client *http.Client) (*http.Response, error) {
@@ -192,7 +225,9 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 	}
 	nativeCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	cmd := exec.CommandContext(nativeCtx, binary, "app-server", "--stdio")
+	// 使用默认 stdio 传输；部分正式 Windows 客户端没有 --stdio 参数。
+	cmd := exec.CommandContext(nativeCtx, binary, "app-server")
+	quietChild(cmd)
 	for _, value := range os.Environ() {
 		name, _, _ := strings.Cut(value, "=")
 		if !oneOf(name, "CODEX_HOME", "IMAGEN_NATIVE_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN") {
@@ -208,7 +243,8 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 	if err != nil {
 		return nil, providerFailure(false, "cannot start native image client")
 	}
-	cmd.Stderr = io.Discard
+	diagnostics := &nativeDiagnostics{}
+	cmd.Stderr = diagnostics
 	if err := cmd.Start(); err != nil {
 		return nil, providerFailure(false, "cannot start native image client")
 	}
@@ -221,6 +257,7 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 	}
 	send(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]any{"name": "codex_cli_rs", "version": version}, "capabilities": map[string]bool{"experimentalApi": true}}})
 	rpcDone := make(chan struct{})
+	var nativeError string
 	go func() {
 		defer close(rpcDone)
 		decoder := json.NewDecoder(stdout)
@@ -230,8 +267,14 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 				Method string          `json:"method"`
 				Result json.RawMessage `json:"result"`
 				Error  json.RawMessage `json:"error"`
+				Params json.RawMessage `json:"params"`
 			}
-			if decoder.Decode(&message) != nil || (len(message.Error) > 0 && string(message.Error) != "null") {
+			if err := decoder.Decode(&message); err != nil {
+				nativeError = "native protocol closed: " + err.Error()
+				return
+			}
+			if len(message.Error) > 0 && string(message.Error) != "null" {
+				nativeError = safeProviderDetail([]byte(`{"error":`+string(message.Error)+`}`), key)
 				return
 			}
 			switch message.ID {
@@ -246,6 +289,12 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 				send(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": result.Thread.ID, "input": []any{map[string]string{"type": "text", "text": "Execute the requested image operation."}}, "effort": "low"}})
 			}
 			if message.Method == "turn/completed" {
+				var params struct {
+					Turn struct{ Error json.RawMessage }
+				}
+				if json.Unmarshal(message.Params, &params) == nil && len(params.Turn.Error) > 0 {
+					nativeError = safeProviderDetail([]byte(`{"error":`+string(params.Turn.Error)+`}`), key)
+				}
 				return
 			}
 		}
@@ -262,7 +311,17 @@ func codexNativeImageRequest(ctx context.Context, p Profile, key string, r Reque
 			case reply := <-relay.result:
 				return reply.response, reply.err
 			default:
-				return nil, providerFailure(relay.images.Load(), "native Codex image operation did not return an image API response")
+				detail := strings.ReplaceAll(diagnostics.String(), key, "[REDACTED]")
+				for _, variable := range p.EnvHeaders {
+					if value := os.Getenv(variable); value != "" {
+						detail = strings.ReplaceAll(detail, value, "[REDACTED]")
+						detail = strings.ReplaceAll(detail, strings.TrimPrefix(value, "Bearer "), "[REDACTED]")
+					}
+				}
+				if len(detail) > 2000 {
+					detail = detail[len(detail)-2000:]
+				}
+				return nil, providerFailure(relay.images.Load(), "native Codex image operation did not return an image API response: "+nativeError+" "+detail)
 			}
 		case <-startup.C:
 			if !relay.images.Load() {

@@ -21,6 +21,7 @@ type Profile struct {
 	Capabilities        []string          `json:"capabilities,omitempty"`
 	Priority            int               `json:"priority,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
+	EnvHeaders          map[string]string `json:"env_headers,omitempty"`
 	Notes               []string          `json:"notes,omitempty"`
 	EditEncoding        string            `json:"edit_encoding,omitempty"`
 	SingleImageRequests bool              `json:"single_image_requests,omitempty"`

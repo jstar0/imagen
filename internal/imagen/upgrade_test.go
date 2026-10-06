@@ -41,7 +41,7 @@ func TestCapturedImageStream(t *testing.T) {
 }
 
 func TestCLIUpgradeRoutingAndEditing(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "imagen")
+	bin := filepath.Join(t.TempDir(), testBinaryName())
 	if out, e := exec.Command("go", "build", "-o", bin, "../../cmd/imagen").CombinedOutput(); e != nil {
 		t.Fatalf("%v %s", e, out)
 	}

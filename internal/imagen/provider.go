@@ -164,6 +164,29 @@ func Generate(ctx context.Context, p Profile, key string, r Request, outputStem 
 }
 
 func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request, outputStem string, progress func(Result) error) (Result, error) {
+	result, err := generateWithProgress(ctx, p, key, r, outputStem, progress)
+	if err != nil {
+		message := err.Error()
+		for _, variable := range p.EnvHeaders {
+			if value := os.Getenv(variable); value != "" {
+				message = strings.ReplaceAll(message, value, "[REDACTED]")
+				if token := strings.TrimPrefix(value, "Bearer "); token != value {
+					message = strings.ReplaceAll(message, token, "[REDACTED]")
+				}
+			}
+		}
+		if pe, ok := err.(*ProviderError); ok {
+			copy := *pe
+			copy.Message = message
+			err = &copy
+		} else {
+			err = fmt.Errorf("%s", message)
+		}
+	}
+	return result, err
+}
+
+func generateWithProgress(ctx context.Context, p Profile, key string, r Request, outputStem string, progress func(Result) error) (Result, error) {
 	var result Result
 	if e := ValidateRequest(p, r); e != nil {
 		return result, e
@@ -234,6 +257,16 @@ func GenerateWithProgress(ctx context.Context, p Profile, key string, r Request,
 	for name, value := range p.Headers {
 		if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Host") {
 			return result, fmt.Errorf("provider extra headers cannot override authentication or protocol headers")
+		}
+		req.Header.Set(name, value)
+	}
+	for name, variable := range p.EnvHeaders {
+		if oneOf(strings.ToLower(name), "authorization", "x-api-key", "api-key", "content-type", "host") {
+			return result, fmt.Errorf("provider environment headers cannot override authentication or protocol headers")
+		}
+		value := os.Getenv(variable)
+		if value == "" || strings.ContainsAny(value, "\r\n") {
+			return result, fmt.Errorf("provider environment header unavailable or invalid: %s", variable)
 		}
 		req.Header.Set(name, value)
 	}

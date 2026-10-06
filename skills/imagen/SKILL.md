@@ -5,6 +5,12 @@ description: Generate and edit raster images with GPT Image or Grok through the 
 
 # Imagen
 
+On Windows PowerShell, invoke the installed executable with
+`& "$env:USERPROFILE/.local/bin/imagen.exe"` if `imagen` is not on PATH. Use a UTF-8
+prompt file and quote paths; POSIX heredocs are not PowerShell commands. If the local
+installation supplies a credential-loading launcher, invoke that launcher instead
+of bypassing it with the underlying executable.
+
 Use `imagen` (fallback `~/.local/bin/imagen`). Select the user's requested model, or use the configured default. Leave `--provider` omitted unless the user names a channel. Models and providers are different: `imagen models --json` shows the local mappings, capabilities and health; command `--help` supplies parameter details. Credentials are loaded by the CLI.
 
 ```bash

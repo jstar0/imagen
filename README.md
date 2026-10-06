@@ -6,14 +6,30 @@ locally. No MCP server or always-running daemon is required.
 
 ## Install
 
-Requires Go 1.26 to build. Supports macOS and Linux; Windows process/file locking
-is not implemented. The installed CLI has no Python or Node runtime dependency.
+Requires Go 1.26 to build. Supports macOS, Linux and Windows.
+The installed CLI has no Python or Node runtime dependency.
 
 ```sh
 git clone git@github.com:jstar0/imagen.git
 cd imagen
 bash scripts/install.sh
 ```
+
+On Windows, use PowerShell instead:
+
+```powershell
+git clone https://github.com/jstar0/imagen.git
+cd imagen
+./scripts/install.ps1
+# If ~/.local/bin is not on PATH:
+& "$env:USERPROFILE/.local/bin/imagen.exe" models --json
+```
+
+The PowerShell installer copies `imagen.exe` without requiring symlink privileges,
+backs up existing binaries/configuration, and preserves configuration unless
+`IMAGEN_CONFIG_SOURCE` is explicitly set. Use `-RuntimeOut`, `-BinDir`, `-ConfigDir`
+and `-BackupDir` to override installation directories. Paths containing spaces and
+non-ASCII characters are supported.
 
 This installs `~/.local/bin/imagen` and backs up replaced binaries/symlinks. It
 preserves existing configuration. `RUNTIME_OUT`, `BIN_DIR`, `CONFIG_DIR` and
@@ -25,11 +41,24 @@ also usable directly, without any AI client.
 
 ## Configure
 
+On Windows, file credentials must have a DACL that restricts reading to the current
+user, SYSTEM and Administrators. POSIX mode bits do not enforce Windows permissions.
+An inherited Users/Everyone read grant is rejected; use a private DACL or an
+environment reference. Workers detach without opening a console, use native
+byte-range file locks, and confirm startup through the locked task state.
+
 Use `config.example.json` as a template for `~/.config/imagen/config.json`.
 `IMAGEN_CONFIG` or `--config` selects another file. Set the referenced environment
 variables, or use `api_key_file` / `env_file` with an owner-only credential file
 (mode 0600). Explicit file references take precedence; missing files never cause
 silent use of an unrelated inherited key.
+
+Secret gateway headers can use `env_headers`, mapping header names to environment
+variable names, for example `{"x-openai-actor-authorization": "IMAGE_ACTOR_TOKEN"}`.
+Only references are persisted in tasks and isolated Codex configuration; missing
+values fail closed. Header credential rotation invalidates stored health cooldowns.
+Authentication and protocol headers cannot be overridden. `headers` remains for
+non-secret, static values.
 
 **The example lists API protocols, not verified access for your account.** No
 credentials, personal endpoints, generated images or runtime state are included.
