@@ -176,9 +176,8 @@ func nativeCodexExecutable(path string) string {
 		// npm global: <prefix>/node_modules/@openai/codex/node_modules/@openai/codex-win32-<arch>/vendor/<triple>/codex/codex.exe
 		filepath.Join(dir, "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-*", "vendor", "*", "codex", "codex.exe"),
 		filepath.Join(dir, "node_modules", "@openai", "codex", "vendor", "*", "codex", "codex.exe"),
-		// pnpm global: <pnpm home>/global/<n>/node_modules/...
-		filepath.Join(dir, "global", "*", "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-*", "vendor", "*", "codex", "codex.exe"),
-		filepath.Join(dir, "global", "*", "node_modules", "@openai", "codex-win32-*", "vendor", "*", "codex", "codex.exe"),
+		// pnpm global: <pnpm home>/global/<n>/.pnpm/@openai+codex@<version>-win32-<arch>/node_modules/@openai/codex/vendor/<triple>/codex/codex.exe
+		filepath.Join(dir, "global", "*", ".pnpm", "@openai+codex@*-win32-*", "node_modules", "@openai", "codex", "vendor", "*", "codex", "codex.exe"),
 	}
 	for _, pattern := range patterns {
 		if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
