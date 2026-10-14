@@ -125,7 +125,7 @@ func (relay *nativeImageRelay) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 func nativeCodexBinary() (string, error) {
 	if explicit := os.Getenv("IMAGEN_CODEX_BINARY"); explicit != "" {
-		if info, err := os.Stat(explicit); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		if info, err := os.Stat(explicit); err == nil && isExecutableFile(explicit, info) {
 			return explicit, nil
 		}
 		return "", fmt.Errorf("IMAGEN_CODEX_BINARY is not executable")
@@ -138,7 +138,11 @@ func nativeCodexBinary() (string, error) {
 			return candidate, nil
 		}
 	}
-	return exec.LookPath("codex")
+	path, err := exec.LookPath("codex")
+	if err != nil {
+		return "", err
+	}
+	return nativeCodexExecutable(path), nil
 }
 
 func nativeCodexConfig(p Profile, address string) string {

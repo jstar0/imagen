@@ -313,7 +313,7 @@ func NewCommand() *cobra.Command {
 	}
 	var id, workerToken string
 	worker := &cobra.Command{Use: "_worker", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		ready := os.NewFile(3, "ready")
+		ready := workerReadyPipe()
 		if ready != nil {
 			defer ready.Close()
 		}

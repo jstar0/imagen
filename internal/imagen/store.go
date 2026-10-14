@@ -4,13 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"syscall"
 	"time"
 )
 
@@ -55,7 +53,7 @@ func atomicJSON(path string, v any) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return replaceFile(f.Name(), path)
 }
 
 func (s Store) create(j Job) (Job, error) {
@@ -97,17 +95,13 @@ func lockFile(path string, nonblock bool) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	flags := syscall.LOCK_EX
-	if nonblock {
-		flags |= syscall.LOCK_NB
-	}
-	if err = syscall.Flock(int(f.Fd()), flags); err != nil {
+	if err = lockHandle(f, nonblock); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return f, nil
 }
-func unlock(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }
+func unlock(f *os.File) { unlockHandle(f); f.Close() }
 
 func (s Store) update(id string, fn func(*Job)) (Job, error) {
 	d, err := s.dir(id)
@@ -154,7 +148,7 @@ func (s Store) Status(id string) (Job, error) {
 	}
 	d, _ := s.dir(id)
 	f, err := lockFile(filepath.Join(d, "worker.lock"), true)
-	if errors.Is(err, syscall.EWOULDBLOCK) {
+	if isLocked(err) {
 		return j, nil
 	}
 	if err != nil {
