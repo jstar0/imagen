@@ -77,18 +77,12 @@ func (s Store) SubmitRoutes(alias string, candidates []Profile, r Request, concu
 		return j, err
 	}
 	defer reader.Close()
-	cmd := exec.Command(executable, "_worker", "--home", s.Root, "--id", j.ID, "--token", j.WorkerToken)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Stdout = log
-	cmd.Stderr = log
-	cmd.ExtraFiles = []*os.File{writer}
-	if err = cmd.Start(); err != nil {
-		writer.Close()
+	err = startWorker(executable, []string{"_worker", "--home", s.Root, "--id", j.ID, "--token", j.WorkerToken}, log, writer)
+	writer.Close()
+	if err != nil {
 		_, _ = s.update(j.ID, func(j *Job) { j.Status = "failed"; j.Error = "could not start worker" })
 		return j, err
 	}
-	writer.Close()
-	go func() { _ = cmd.Wait() }()
 	_ = reader.SetReadDeadline(time.Now().Add(5 * time.Second))
 	b := make([]byte, 1)
 	_, err = io.ReadFull(reader, b)
@@ -113,12 +107,12 @@ func (s Store) slot(ctx context.Context, limit int) (*os.File, error) {
 			if err != nil {
 				return nil, err
 			}
-			err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			err = lockHandle(f, true)
 			if err == nil {
 				return f, nil
 			}
 			f.Close()
-			if !errors.Is(err, syscall.EWOULDBLOCK) {
+			if !isLocked(err) {
 				return nil, err
 			}
 		}

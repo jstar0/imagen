@@ -166,8 +166,8 @@ func readPrivate(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential source unavailable: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("credential source must be an owner-only regular file: %s", path)
+	if err = checkPrivate(path, info); err != nil {
+		return nil, err
 	}
 	return os.ReadFile(path)
 }

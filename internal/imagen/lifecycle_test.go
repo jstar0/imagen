@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -20,7 +19,7 @@ import (
 // These tests run the actual compiled CLI and detached workers against loopback
 // HTTP fixtures; no live provider or user credential is involved.
 func TestCLILifecycle(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "imagen")
+	bin := filepath.Join(t.TempDir(), "imagen"+exeSuffix)
 	build := exec.Command("go", "build", "-mod=mod", "-o", bin, "../../cmd/imagen")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, out)
@@ -204,7 +203,7 @@ func TestCLILifecycle(t *testing.T) {
 		if j.PID <= 0 || j.Status != "running" {
 			t.Fatalf("worker not running: %+v", j)
 		}
-		if err := syscall.Kill(j.PID, syscall.SIGKILL); err != nil {
+		if err := killProcess(j.PID); err != nil {
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(5 * time.Second)
@@ -251,7 +250,7 @@ func newLifecycleCLI(t *testing.T, bin, url string) *lifecycleCLI {
 		jobs, _ := (Store{Root: c.root}).List(100)
 		for _, j := range jobs {
 			if !terminal(j.Status) && j.PID > 0 {
-				_ = syscall.Kill(j.PID, syscall.SIGKILL)
+				_ = killProcess(j.PID)
 			}
 		}
 	})
@@ -330,9 +329,7 @@ func TestLifecycleConfigValidationAndCredentialSource(t *testing.T) {
 	if err != nil || got != "explicit-key" {
 		t.Fatalf("explicit source not respected: %q %v", got, err)
 	}
-	if err := os.Chmod(p.EnvFile, 0644); err != nil {
-		t.Fatal(err)
-	}
+	makeShared(t, p.EnvFile)
 	if _, err = Credential(p); err == nil {
 		t.Fatal("world-readable credential accepted")
 	}

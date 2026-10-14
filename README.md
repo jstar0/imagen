@@ -6,8 +6,8 @@ locally. No MCP server or always-running daemon is required.
 
 ## Install
 
-Requires Go 1.26 to build. Supports macOS and Linux; Windows process/file locking
-is not implemented. The installed CLI has no Python or Node runtime dependency.
+Requires Go 1.26 to build. Supports macOS, Linux and Windows (see
+[Windows notes](#windows-notes)). The installed CLI has no Python or Node runtime dependency.
 
 ```sh
 git clone git@github.com:jstar0/imagen.git
@@ -19,6 +19,18 @@ This installs `~/.local/bin/imagen` and backs up replaced binaries/symlinks. It
 preserves existing configuration. `RUNTIME_OUT`, `BIN_DIR`, `CONFIG_DIR` and
 `BACKUP_DIR` may be overridden. An explicit `IMAGEN_CONFIG_SOURCE` links an existing
 configuration file into the config directory; it is never inferred from a clone.
+
+On Windows, from PowerShell:
+
+```powershell
+git clone https://github.com/jstar0/imagen.git
+cd imagen
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+This uses the same layout and backups under the user profile and installs
+`%USERPROFILE%\.local\bin\imagen.exe` as a copy (symlinks need extra privileges);
+add that directory to the user `PATH`.
 
 Install or symlink `skills/imagen` into your agent's skill directory. The CLI is
 also usable directly, without any AI client.
@@ -134,6 +146,20 @@ or previews; inspect before initiating another paid task. Cancellation/reboot
 does not imply upstream cancellation or refund. No automatic restart after a
 worker is lost. Use exact IDs for continued edits: global `last` may refer to a
 different client's task.
+
+## Windows notes
+
+- Locks use `LockFileEx` with the same exclusive, handle-lifetime semantics as `flock`.
+- The worker starts without a console in its own process group and, when the
+  caller's job object permits it, breaks away from that job so it outlives the
+  terminal or agent sandbox that ran the CLI. If breakaway is forbidden, it stays
+  in the job and lives as long as that job does.
+- POSIX `0600` is not meaningful for credential files. Instead, the file's ACL must
+  not grant access to Everyone, Users, Authenticated Users, Guests, Anonymous,
+  Interactive or Network. Files created under the user profile inherit a private ACL.
+- `IMAGEN_CODEX_BINARY` must have an executable extension (`PATHEXT`). A `codex`
+  found on `PATH` that is an npm or pnpm shim resolves to the bundled `codex.exe`.
+- `--notify` remains macOS-only.
 
 ## Develop and verify
 
