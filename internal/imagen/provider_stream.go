@@ -147,7 +147,7 @@ func safeRejection(status int, body []byte) bool {
 	if status != 400 && status != 403 && status != 404 {
 		return false
 	}
-	for _, code := range []string{"insufficient_quota", "spend_limit_exceeded", "invalid_api_key", "model_not_found", "unsupported_model", "model_not_supported", "unknown model", "unsupported model", "model is not supported"} {
+	for _, code := range []string{"insufficient_quota", "insufficient_user_quota", "insufficient balance", "用户额度不足", "spend_limit_exceeded", "invalid_api_key", "model_not_found", "unsupported_model", "model_not_supported", "unknown model", "unsupported model", "model is not supported"} {
 		if strings.Contains(text, code) {
 			return true
 		}

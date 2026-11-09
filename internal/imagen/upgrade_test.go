@@ -212,6 +212,12 @@ func TestPresetNormalization(t *testing.T) {
 	if e := ValidateRequest(base, Request{Prompt: "test", Count: 1, Quality: "max"}); e != nil {
 		t.Fatalf("exact GPT Image 2.5 rejected max quality: %v", e)
 	}
+	for _, m := range []string{"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"} {
+		base.Model = m
+		if e := ValidateRequest(base, Request{Prompt: "test", Count: 1, Quality: "xhigh"}); e != nil {
+			t.Fatalf("%s rejected xhigh quality: %v", m, e)
+		}
+	}
 	base.Model = "gpt-image-2"
 	if e := ValidateRequest(base, Request{Prompt: "test", Count: 1, Quality: "max"}); e == nil {
 		t.Fatal("GPT Image 2 accepted unsupported max quality")

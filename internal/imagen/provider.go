@@ -137,8 +137,13 @@ func ValidateRequest(p Profile, r Request) error {
 		if r.AspectRatio != "" || r.Resolution != "" {
 			return fmt.Errorf("GPT Image uses size, not aspect-ratio or resolution")
 		}
-		isGPTImage25 := p.Model == "gpt-image-2.5" || strings.HasPrefix(p.Model, "gpt-image-2.5-")
-		if !oneOf(r.Quality, "", "auto", "low", "medium", "high") && !(isGPTImage25 && oneOf(r.Quality, "xhigh", "max")) {
+		extendedQuality := false
+		for _, family := range []string{"gpt-image-2.5", "gpt-image-2.6"} {
+			if p.Model == family || strings.HasPrefix(p.Model, family+"-") {
+				extendedQuality = true
+			}
+		}
+		if !oneOf(r.Quality, "", "auto", "low", "medium", "high") && !(extendedQuality && oneOf(r.Quality, "xhigh", "max")) {
 			return fmt.Errorf("GPT Image quality must be auto, low, medium or high")
 		}
 		if !oneOf(r.Format, "", "auto", "png", "jpeg", "webp") {

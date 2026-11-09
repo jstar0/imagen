@@ -227,7 +227,7 @@ func NewCommand() *cobra.Command {
 		gen.Flags().StringVar(&r.Size, "size", "", "GPT pixel dimensions or legacy 1K/2K/4K preset")
 		gen.Flags().StringVar(&r.AspectRatio, "aspect-ratio", "", "Grok aspect ratio, e.g. 16:9")
 		gen.Flags().StringVar(&r.Resolution, "resolution", "", "Grok resolution: 1k or 2k")
-		gen.Flags().StringVar(&r.Quality, "quality", "", "GPT: low/medium/high/auto; Grok: low/medium/auto")
+		gen.Flags().StringVar(&r.Quality, "quality", "", "GPT: low/medium/high/auto (2.5/2.6 also xhigh/max); Grok: low/medium/auto")
 		gen.Flags().StringVar(&r.Format, "format", "", "GPT output format: png/jpeg/webp; Grok keeps native encoding")
 		root.AddCommand(gen)
 	}
