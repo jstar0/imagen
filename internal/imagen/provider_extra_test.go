@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -166,5 +167,43 @@ func TestPartialMultiResultPreserved(t *testing.T) {
 	var pe *ProviderError
 	if len(got.Images) != 1 || !errors.As(e, &pe) || !pe.Unknown || pe.SafeFallback {
 		t.Fatalf("%+v %v", got, e)
+	}
+}
+
+func TestSizeHintInPrompt(t *testing.T) {
+	cases := map[string]string{"1536x1024": "3:2 (1536x1024)", "1024x1536": "2:3 (1024x1536)", "2048x1152": "16:9 (2048x1152)", "1254x1254": "1:1 (1254x1254)", "1000x777": "1.29:1 (1000x777)"}
+	for size, want := range cases {
+		if got := aspectRatioHint(size); !strings.Contains(got, "aspect ratio: "+want) {
+			t.Errorf("%s: %q lacks %q", size, got, want)
+		}
+	}
+	for _, bad := range []string{"", "auto", "1K", "0x10"} {
+		if aspectRatioHint(bad) != "" {
+			t.Errorf("%q should yield no hint", bad)
+		}
+	}
+	body, _, err := providerBody(Profile{Kind: "gpt-image", Model: "gpt-image-2", SizeHintInPrompt: true}, Request{Prompt: "apple", NegativePrompt: "logo", Size: "1536x1024", Count: 1})
+	if err != nil || !strings.Contains(string(body), "apple\\n\\nOutput image aspect ratio: 3:2 (1536x1024).\\n\\nAvoid: logo") {
+		t.Fatalf("hint order wrong: %s %v", body, err)
+	}
+	plain, _, _ := providerBody(Profile{Kind: "gpt-image", Model: "gpt-image-2"}, Request{Prompt: "apple", Size: "1536x1024", Count: 1})
+	if strings.Contains(string(plain), "aspect ratio") {
+		t.Fatal("hint leaked into a provider without the option")
+	}
+}
+
+func TestPNGOnlyProviderSkipsLossyFormats(t *testing.T) {
+	p := Profile{Kind: "gpt-image", Model: "gpt-image-2", PNGOnly: true, Capabilities: []string{"generate"}}
+	if missingCapability(p, Request{Prompt: "x", Count: 1, Format: "jpeg"}) == "" || missingCapability(p, Request{Prompt: "x", Count: 1, Format: "webp"}) == "" {
+		t.Fatal("png-only provider accepted a lossy format")
+	}
+	for _, f := range []string{"", "auto", "png"} {
+		if got := missingCapability(p, Request{Prompt: "x", Count: 1, Format: f}); got != "" {
+			t.Fatalf("format %q rejected: %s", f, got)
+		}
+	}
+	body, err := responsesBody(Profile{Kind: "gpt-image", Model: "gpt-image-2", ResponsesModel: "m", SizeHintInPrompt: true}, Request{Prompt: "apple", Size: "1536x1024", Format: "jpeg", Count: 1})
+	if err != nil || !strings.Contains(string(body), "aspect ratio: 3:2") || !strings.Contains(string(body), `"output_format":"jpeg"`) {
+		t.Fatalf("responses body: %s %v", body, err)
 	}
 }

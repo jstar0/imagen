@@ -25,6 +25,9 @@ func responsesBody(p Profile, r Request) ([]byte, error) {
 		tool["partial_images"] = r.PartialImages
 	}
 	prompt := r.Prompt
+	if p.SizeHintInPrompt {
+		prompt += aspectRatioHint(r.Size)
+	}
 	if r.NegativePrompt != "" {
 		prompt += "\n\nAvoid: " + r.NegativePrompt
 	}

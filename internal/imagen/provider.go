@@ -415,10 +415,14 @@ func safeProviderDetail(body []byte, key string) string {
 }
 
 func providerBody(p Profile, r Request) ([]byte, string, error) {
-	fields := map[string]any{"model": p.Model, "prompt": r.Prompt, "n": imageCount(r)}
-	if r.NegativePrompt != "" {
-		fields["prompt"] = r.Prompt + "\n\nAvoid: " + r.NegativePrompt
+	prompt := r.Prompt
+	if p.Kind == "gpt-image" && p.SizeHintInPrompt && len(r.References) == 0 {
+		prompt += aspectRatioHint(r.Size)
 	}
+	if r.NegativePrompt != "" {
+		prompt += "\n\nAvoid: " + r.NegativePrompt
+	}
+	fields := map[string]any{"model": p.Model, "prompt": prompt, "n": imageCount(r)}
 	optional := func(k, v string) {
 		if v != "" {
 			fields[k] = v
@@ -628,4 +632,22 @@ func publishImage(path string, b []byte) error {
 	}
 	// link(2) atomically publishes a complete file and fails if the target exists.
 	return os.Link(tmp, path)
+}
+
+// aspectRatioHint turns an explicit WxH size into a prompt sentence. Gateways
+// that ignore the size parameter still follow an aspect ratio stated in the prompt.
+func aspectRatioHint(size string) string {
+	var w, h int
+	if n, err := fmt.Sscanf(size, "%dx%d", &w, &h); err != nil || n != 2 || w <= 0 || h <= 0 {
+		return ""
+	}
+	a, b := w, h
+	for b != 0 {
+		a, b = b, a%b
+	}
+	rw, rh := w/a, h/a
+	if rw > 32 || rh > 32 {
+		return fmt.Sprintf("\n\nOutput image aspect ratio: %.2f:1 (%dx%d).", float64(w)/float64(h), w, h)
+	}
+	return fmt.Sprintf("\n\nOutput image aspect ratio: %d:%d (%dx%d).", rw, rh, w, h)
 }

@@ -24,6 +24,8 @@ type Profile struct {
 	Notes               []string          `json:"notes,omitempty"`
 	EditEncoding        string            `json:"edit_encoding,omitempty"`
 	SingleImageRequests bool              `json:"single_image_requests,omitempty"`
+	SizeHintInPrompt    bool              `json:"size_hint_in_prompt,omitempty"`
+	PNGOnly             bool              `json:"png_only,omitempty"`
 	Kind                string            `json:"kind"`
 	Model               string            `json:"model"`
 	BaseURL             string            `json:"base_url"`

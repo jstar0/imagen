@@ -69,6 +69,9 @@ func missingCapability(p Profile, r Request) string {
 	if p.GenerationAPI == "responses" && len(r.References) == 0 && r.Moderation != "" {
 		return "moderation (Responses generation)"
 	}
+	if p.PNGOnly && (r.Format == "jpeg" || r.Format == "webp") {
+		return "format (provider outputs PNG only)"
+	}
 	caps := p.Capabilities
 	if len(caps) == 0 {
 		caps = []string{"generate", "edit"}

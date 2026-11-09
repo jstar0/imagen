@@ -38,7 +38,11 @@ func publicJob(j Job) jobView {
 		result.RequestedSize = j.Request.Size
 		actual := fmt.Sprintf("%dx%d", result.Width, result.Height)
 		if actual != j.Request.Size {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Provider returned %s instead of requested %s; original image preserved", actual, j.Request.Size))
+			if j.Profile.SizeHintInPrompt {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Provider ignores pixel size; requested %s was sent as an aspect-ratio hint and %s was returned", j.Request.Size, actual))
+			} else {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Provider returned %s instead of requested %s; original image preserved", actual, j.Request.Size))
+			}
 		}
 		j.Result = &result
 	}
